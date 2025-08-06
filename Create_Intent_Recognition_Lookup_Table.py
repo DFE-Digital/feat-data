@@ -99,7 +99,7 @@ SSAT2s=[
         "Law and legal services"]
 
 
-list_terms=SSAT1s#+SSAT2s
+list_terms=SSAT1s+SSAT2s
 
 
 azenv=os.getenv('AZURE_CIP')
@@ -119,4 +119,56 @@ print("Time elapsed: {}s".format(round(etime-stime),4))
 
 intent_embedding=[item.embedding for item in client_response.data]
 print(len(intent_embedding),len(list_terms))
+dict_embeddings={
+    'IntentRecognitionSearchTerms':list_terms,
+    'Embeddings':intent_embedding
+}
+with open("jsons/IntentRecognition_List_Terms_StructOfArray.json",'w+') as jf:    
+    json.dump(dict_embeddings,jf,indent=4)
 
+# Convert Struct (Dictionary) of Array (List) / SoA into Array of struct (AoS)
+docs_to_upload=[]
+for it in range(0,len(list_terms)):
+    doc={}
+    doc['IntentRecognitionSearchTerm']=list_terms[it]
+    doc['IntentRecognitionSearchTermVector']=intent_embedding[it]
+    doc['id']='Document_{}'.format(it)
+    docs_to_upload.append(doc)
+
+
+# Now got the list of docs, now we define the index.
+
+def Create_Index(docs:dict={},indexname:str='intentrecognition'):    
+    index_client=SearchIndexClient(
+        endpoint=os.environ['AZURE_AI_SEARCH_URL'],credential=AzureKeyCredential(os.environ['ADMIN_KEY']))
+    
+    #establish fields for the index, searchable use keyword search, search use vectors, simple can be sortable filterable or facetable
+    fields=[SimpleField(name="id", type=SearchFieldDataType.String, key=True, sortable=True, filterable=True, facetable=True),            
+            SearchableField(name="IntentRecognitionSearchTerm", type=SearchFieldDataType.String),
+            SearchField(name="IntentRecognitionSearchTermVector", type=SearchFieldDataType.Collection(SearchFieldDataType.Single),searchable=True, vector_search_dimensions=1536, vector_search_profile_name="myHnswProfile"),
+            ]
+
+    vector_search = VectorSearch(
+        algorithms=[
+            HnswAlgorithmConfiguration(
+                name="myHnsw"
+            )
+        ],
+        profiles=[
+            VectorSearchProfile(
+                name="myHnswProfile",
+                algorithm_configuration_name="myHnsw",
+            )
+        ])
+    
+    index=SearchIndex(name=indexname,fields=fields ,vector_search=vector_search)
+    result=index_client.create_or_update_index(index)
+
+    search_client=SearchClient(endpoint=os.environ['AZURE_AI_SEARCH_URL'],
+            index_name=indexname,
+            credential=AzureKeyCredential(os.environ['ADMIN_KEY']))
+    print(len(docs))
+    search_client.upload_documents(docs)
+    print(f"{result.name} created")
+
+Create_Index(docs_to_upload,'intentrecognition')
